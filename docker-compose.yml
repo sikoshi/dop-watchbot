@@ -1,0 +1,23 @@
+version: '3'
+
+networks:
+  default:
+    driver: bridge
+
+services:
+  watchbot_pg:
+    image: postgres:11.6
+    container_name: watchbot_pg
+    restart: always
+    shm_size: 1g
+    environment:
+      POSTGRES_USER: "watchbot_pg"
+      POSTGRES_PASSWORD: "watchbot_pg"
+      POSTGRES_DB: "watchbot_pg"
+    volumes:
+      - ./docker/var/lib/postgresql/data:/var/lib/postgresql/data
+    #      - ./docker/postgres/:/docker-entrypoint-initdb.d/
+    ports:
+      - "5432:5432"
+    networks:
+      - default
