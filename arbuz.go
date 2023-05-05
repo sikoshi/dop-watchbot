@@ -1,9 +1,12 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"github.com/PuerkitoBio/goquery"
+	_ "github.com/jackc/pgx/stdlib"
+	"github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3"
 	"io/ioutil"
 	"log"
@@ -11,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 )
+
+var DB *sqlx.DB
 
 type categoryType struct {
 	Id int `json:"id"`
@@ -39,7 +44,7 @@ type productType struct {
 	WeightMax       float64	`json:"weightMax"`
 	PieceWeightMax  float64 `json:"pieceWeightMax"`
 	QuantityMinStep float64 `json:"quantityMinStep"`
-	PriceActual     int     `json:"priceActual"`
+	PriceActual     float64  `json:"priceActual"`
 	Barcode         string  `json:"barcode"`
 	IsAvailable     bool    `json:"isAvailable"`
 	IsLocal			bool   `json:"isLocal"`
@@ -179,7 +184,7 @@ func processCategory(jwtToken string, phpSessId string, categoryId int)  {
 			"&page=" + strconv.Itoa(currPage) +
 			"&limit=100"
 
-		fmt.Println(url)
+		//fmt.Println(url)
 
 		method := "GET"
 
@@ -214,7 +219,7 @@ func processCategory(jwtToken string, phpSessId string, categoryId int)  {
 			if len(r.Data.Products.Data) > 0 {
 				for _, p := range r.Data.Products.Data {
 					processProduct(p)
-					break
+					//break
 				}
 			}
 
@@ -233,17 +238,64 @@ func processCategory(jwtToken string, phpSessId string, categoryId int)  {
 }
 
 func processProduct(p productType) {
+
+	storedProduct := new(productType)
+
+	dbErr := DB.QueryRow("SELECT * FROM arbuz_products WHERE id = $1", p.ID).Scan(&storedProduct)
+
+	if dbErr != nil && dbErr == sql.ErrNoRows {
+
+		// insert product data
+		fmt.Printf("%v \n", p)
+		_, err := DB.Exec("INSERT INTO arbuz_products (" +
+			"id,catalog_id,name,producer_country,brand_name,description,uri,image,measure,is_weighted,weight_avg," +
+			"weight_min,weight_max,piece_weight_max,quantity_min_step,barcode,is_available,is_local) " +
+			"VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)",
+			p.ID, p.CatalogID, p.Name, p.ProducerCountry, p.BrandName, p.Description,
+			p.URI, p.Image, p.Measure, p.IsWeighted, p.WeightAvg, p.WeightMin, p.WeightMax,
+			p.PieceWeightMax, p.QuantityMinStep, p.Barcode, p.IsAvailable, p.IsLocal)
+		if err != nil {
+			fmt.Println(err)
+		}
+	} else {
+		// update product data
+	}
 	// products table
-
 	// products_prices table
-
-	fmt.Printf("%v\n", p)
 
 	if p.IsAvailable {
 
+		lastPrice := 0
+		currPrice := int(p.PriceActual)
+
+		pErr := DB.QueryRow("SELECT product_price FROM arbuz_prices WHERE product_id = $1 AND is_last=true", p.ID).Scan(&lastPrice)
+
+		if pErr != nil && pErr == sql.ErrNoRows {
+			DB.Exec("INSERT INTO arbuz_prices (product_id, product_price, is_last) VALUES ($1, $2, true)",
+				p.ID, currPrice)
+		} else if lastPrice != currPrice {
+
+			//fmt.Printf("%d => %d\n", lastPrice, currPrice)
+
+			DB.Exec("UPDATE arbuz_prices SET is_last=false WHERE product_id=$1 AND is_last=true", p.ID)
+			DB.Exec("INSERT INTO arbuz_prices (product_id, product_price, is_last) VALUES ($1, $2, true)", p.ID, currPrice)
+		}
 	}
 
+	// get last price for this product, if previous price differs from current then insert new one
+
 	//p.PriceActual
+}
+
+func initDB() {
+	pgSqlConnectionString := "watchbot_pg:watchbot_pg@127.0.0.1:5432/watchbot_pg"
+
+	db, err := sqlx.Connect("pgx", "postgres://" + pgSqlConnectionString)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	DB = db
 }
 
 func main ()  {
@@ -251,6 +303,8 @@ func main ()  {
 	c := make(map[int]categoryType)
 
 	jwtToken, phpSessId, catalogString := initScrap()
+
+	initDB()
 
 	if err := json.Unmarshal([]byte(catalogString), &c); err != nil {
 		// panic
@@ -261,6 +315,6 @@ func main ()  {
 
 		processCategory(jwtToken, phpSessId, v.Id)
 
-		break
+		//break
 	}
 }

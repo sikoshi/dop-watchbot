@@ -14,6 +14,7 @@ services:
       POSTGRES_USER: "watchbot_pg"
       POSTGRES_PASSWORD: "watchbot_pg"
       POSTGRES_DB: "watchbot_pg"
+      TZ: "Asia/Almaty"
     volumes:
       - ./docker/var/lib/postgresql/data:/var/lib/postgresql/data
     #      - ./docker/postgres/:/docker-entrypoint-initdb.d/
@@ -21,3 +22,8 @@ services:
       - "5432:5432"
     networks:
       - default
+    healthcheck:
+      test: pg_isready -U watchbot_pg -d watchbot_pg
+      interval: 10s
+      timeout: 3s
+      retries: 5
