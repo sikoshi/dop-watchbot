@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"os"
+	"github.com/joho/godotenv"
 )
 
 var DB *sqlx.DB
@@ -239,6 +241,7 @@ func processCategory(jwtToken string, phpSessId string, categoryId int)  {
 
 func processProduct(p productType) {
 
+	// products table
 	storedProduct := new(productType)
 
 	dbErr := DB.QueryRow("SELECT * FROM arbuz_products WHERE id = $1", p.ID).Scan(&storedProduct)
@@ -259,36 +262,39 @@ func processProduct(p productType) {
 		}
 	} else {
 		// update product data
+		
 	}
-	// products table
+
 	// products_prices table
-
-	if p.IsAvailable {
-
-		lastPrice := 0
-		currPrice := int(p.PriceActual)
-
-		pErr := DB.QueryRow("SELECT product_price FROM arbuz_prices WHERE product_id = $1 AND is_last=true", p.ID).Scan(&lastPrice)
-
-		if pErr != nil && pErr == sql.ErrNoRows {
-			DB.Exec("INSERT INTO arbuz_prices (product_id, product_price, is_last) VALUES ($1, $2, true)",
-				p.ID, currPrice)
-		} else if lastPrice != currPrice {
-
-			//fmt.Printf("%d => %d\n", lastPrice, currPrice)
-
-			DB.Exec("UPDATE arbuz_prices SET is_last=false WHERE product_id=$1 AND is_last=true", p.ID)
-			DB.Exec("INSERT INTO arbuz_prices (product_id, product_price, is_last) VALUES ($1, $2, true)", p.ID, currPrice)
-		}
-	}
-
 	// get last price for this product, if previous price differs from current then insert new one
+	lastPrice := 0
+	currPrice := int(p.PriceActual)
 
-	//p.PriceActual
+	pErr := DB.QueryRow("SELECT product_price FROM arbuz_prices WHERE product_id = $1 AND is_last=true", p.ID).Scan(&lastPrice)
+
+	if pErr != nil && pErr == sql.ErrNoRows {
+		DB.Exec("INSERT INTO arbuz_prices (product_id, product_price, is_last) VALUES ($1, $2, true)",
+			p.ID, currPrice)
+	} else if lastPrice != currPrice {
+
+		//fmt.Printf("%d => %d\n", lastPrice, currPrice)
+
+		DB.Exec("UPDATE arbuz_prices SET is_last=false WHERE product_id=$1 AND is_last=true", p.ID)
+		DB.Exec("INSERT INTO arbuz_prices (product_id, product_price, is_last) VALUES ($1, $2, true)", p.ID, currPrice)
+	}
 }
 
 func initDB() {
-	pgSqlConnectionString := "watchbot_pg:watchbot_pg@127.0.0.1:5432/watchbot_pg"
+	
+	// := "watchbot_pg:watchbot_pg@127.0.0.1:5432/watchbot_pg"
+
+	var pgSqlConnectionString string
+
+	if val, exists := os.LookupEnv("PGSQLCONNECTIONSTRING"); exists {
+		pgSqlConnectionString = val
+	} else if err := godotenv.Load(".env"); err == nil {
+		pgSqlConnectionString = os.Getenv("PGSQLCONNECTIONSTRING")
+	}
 
 	db, err := sqlx.Connect("pgx", "postgres://" + pgSqlConnectionString)
 	if err != nil {
