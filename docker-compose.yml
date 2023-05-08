@@ -29,3 +29,17 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+  watchbot_migrate:
+    env_file:
+      - .env
+    image: migrate/migrate
+    container_name: watchbot_migrate
+    networks:
+      - default
+    volumes:
+      - ./migrations:/migrations
+    command: [ "-path", "/migrations", "-database",  "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:5432/${POSTGRES_DB}?sslmode=disable", "up", "3" ]
+    links:
+      - watchbot_pg
+    depends_on:
+      - watchbot_pg
