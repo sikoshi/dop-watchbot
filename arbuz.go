@@ -7,14 +7,13 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	_ "github.com/jackc/pgx/stdlib"
 	"github.com/jmoiron/sqlx"
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/joho/godotenv"
 	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
-	"os"
-	"github.com/joho/godotenv"
 )
 
 var DB *sqlx.DB
@@ -249,7 +248,8 @@ func processProduct(p productType) {
 	if dbErr != nil && dbErr == sql.ErrNoRows {
 
 		// insert product data
-		fmt.Printf("%v \n", p)
+		//fmt.Printf("%v \n", p)
+
 		_, err := DB.Exec("INSERT INTO arbuz_products (" +
 			"id,catalog_id,name,producer_country,brand_name,description,uri,image,measure,is_weighted,weight_avg," +
 			"weight_min,weight_max,piece_weight_max,quantity_min_step,barcode,is_available,is_local) " +
@@ -262,7 +262,6 @@ func processProduct(p productType) {
 		}
 	} else {
 		// update product data
-		
 	}
 
 	// products_prices table
@@ -306,11 +305,14 @@ func initDB() {
 
 func main ()  {
 
+	// establishing database connection
+	initDB()
+
+	// categories
 	c := make(map[int]categoryType)
 
+	// getting jwt token for further api calls
 	jwtToken, phpSessId, catalogString := initScrap()
-
-	initDB()
 
 	if err := json.Unmarshal([]byte(catalogString), &c); err != nil {
 		// panic
