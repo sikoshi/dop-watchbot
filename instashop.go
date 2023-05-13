@@ -1,34 +1,45 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"github.com/PuerkitoBio/goquery"
+	"github.com/jmoiron/sqlx"
+	_ "github.com/jackc/pgx/stdlib"
+	"github.com/joho/godotenv"
 	"log"
 	"net/http"
+	"os"
+	"path"
 	"strconv"
 	"strings"
 	"github.com/gosimple/slug"
 )
 
+var DB *sqlx.DB
+
 type insStoreType struct {
+	StoreId int `db: "store_id"`
 	Link string
 	Title string
 	Slug string
 }
 
 type insCat struct {
-	Id int
+	CategoryId int
+	StoreId int
 	ShopSlug string
 	Link string
 	Title string
 }
 
 type insProduct struct {
-	Id int
-	ShopId int
+	ProductId int
+	StoreId int
 	CategoryId int
 	CategoryTitle string
 	Price int
+	Slug string
 	Brand string
 	Title string
 	Link string
@@ -82,22 +93,75 @@ func getStores() []insStoreType {
 
 func processShopProduct(p insProduct)  {
 
+	var storedProduct insProduct
+
+	dbErr := DB.QueryRow(
+		"SELECT product_id, store_id, category_id, brand, title, link " +
+			"FROM instashop_products WHERE store_id=$1 AND product_id = $2",
+		p.StoreId, p.ProductId).Scan(
+			&storedProduct.ProductId, &storedProduct.StoreId, &storedProduct.CategoryId,
+			&storedProduct.Brand, &storedProduct.Title, &storedProduct.Link)
+	if dbErr != nil && dbErr == sql.ErrNoRows {
+
+		_, err := DB.Exec("" +
+			"INSERT INTO instashop_products (product_id, store_id, category_id, brand, title, link) " +
+			"VALUES ($1, $2, $3, $4, $5, $6)",
+			p.ProductId, p.StoreId, p.CategoryId, p.Brand, p.Title, p.Link)
+		if err != nil {
+			fmt.Println(err)
+		}
+	}
+	// setting price
+
+	lastPrice := 0
+	currPrice := int(p.Price)
+
+	pErr := DB.QueryRow("SELECT product_price FROM instashop_prices " +
+		"WHERE product_id = $1 AND store_id=$2 AND is_last=true", p.ProductId, p.StoreId).Scan(&lastPrice)
+
+	if pErr != nil && pErr == sql.ErrNoRows {
+		DB.Exec("INSERT INTO instashop_prices (product_id, store_id, product_price, is_last) VALUES ($1, $2,$3, true)",
+			p.ProductId, p.StoreId, currPrice)
+	} else if lastPrice != currPrice {
+
+		//fmt.Printf("%d => %d\n", lastPrice, currPrice)
+
+		DB.Exec("UPDATE instashop_prices SET is_last=false WHERE product_id=$1 AND store_id=$2 AND is_last=true", p.ProductId, p.StoreId)
+		DB.Exec("INSERT INTO instashop_prices (product_id, store_id, product_price, is_last) VALUES ($1, $2, true)", p.ProductId, p.StoreId, currPrice)
+	}
 }
 
 func processShopCategory(c insCat)  {
 
+	c.CategoryId, _ = strconv.Atoi(path.Base(c.Link))
+
+	// products table
+	var storedCategory insCat
+
+	dbErr := DB.QueryRow("SELECT category_id, store_id, title, link " +
+		"FROM instashop_categories WHERE store_id=$1 AND category_id = $2",
+		c.StoreId, c.CategoryId).Scan(&storedCategory.CategoryId, &storedCategory.StoreId, &storedCategory.Link, &storedCategory.Title)
+
+	if dbErr != nil && dbErr == sql.ErrNoRows {
+
+		_, err := DB.Exec("INSERT INTO instashop_categories (category_id,store_id,title,link) " +
+			"VALUES ($1, $2, $3, $4) ", c.CategoryId, c.StoreId, c.Title, c.Link)
+		if err != nil {
+			fmt.Println(err)
+		}
+	}
+
 	p := 1
 
 	l := make(map[int]bool)
+
+	var productsToProcess []insProduct
 
 	breakLoop := false
 
 	for {
 
 		targetUrl := "https://almaty.instashop.kz" + c.Link + "?&ajax=Y&PAGEN_1=" + strconv.Itoa(p)
-
-
-		fmt.Println(targetUrl)
 
 		resp, err := http.Get(targetUrl)
 		if err != nil {
@@ -120,7 +184,7 @@ func processShopCategory(c insCat)  {
 				var p insProduct
 
 				if productId, e := plink.Attr("data-product"); e {
-					p.Id, _ = strconv.Atoi(productId)
+					p.ProductId, _ = strconv.Atoi(productId)
 				}
 
 				if productPrice, e := plink.Attr("data-price"); e {
@@ -131,17 +195,18 @@ func processShopCategory(c insCat)  {
 				p.Title,_          = plink.Attr("data-name")
 				p.Link,_           = plink.Attr("href")
 				p.CategoryTitle, _ = plink.Attr("active-section")
-				p.CategoryId       = c.Id
-
-				fmt.Printf("%v\n", p)
+				p.CategoryId       = c.CategoryId
+				p.StoreId          = c.StoreId
 
 				pl = append(pl, p)
 			})
 
 			if len(pl) > 0 {
 				for _, v := range pl {
-					if !l[v.Id] {
-						l[v.Id] = true
+					if !l[v.ProductId] {
+						l[v.ProductId] = true
+
+						productsToProcess = append(productsToProcess, v)
 					} else {
 						breakLoop = true
 					}
@@ -155,13 +220,42 @@ func processShopCategory(c insCat)  {
 
 		p++
 	}
+
+
+	if len(productsToProcess) > 0 {
+		for _,product := range productsToProcess {
+			processShopProduct(product)
+		}
+	}
 }
 
 func processStore(s insStoreType)  {
 
+	// products table
+	var storedShop insStoreType
+
+	dbErr := DB.QueryRow("SELECT store_id, slug, title, link FROM instashop_stores WHERE slug = $1",
+		s.Slug).Scan(&storedShop.StoreId, &storedShop.Slug, &storedShop.Title, &storedShop.Link)
+
+	if dbErr != nil && dbErr == sql.ErrNoRows {
+
+		lastInsertId := 0
+
+		err := DB.QueryRow("INSERT INTO instashop_stores (slug,title,link) " +
+			"VALUES ($1, $2, $3) RETURNING store_id", s.Slug, s.Title, s.Link).Scan(&lastInsertId)
+		if err != nil {
+			fmt.Println(err)
+		}
+
+		s.StoreId = lastInsertId
+
+	} else {
+		s.StoreId = storedShop.StoreId
+	}
+
 	targetUrl := "https://almaty.instashop.kz" + s.Link
 
-	//fmt.Printf("%s\n", targetUrl)
+	fmt.Printf("%s\n", targetUrl)
 
 	resp, err := http.Get(targetUrl)
 	if err != nil {
@@ -177,6 +271,7 @@ func processStore(s insStoreType)  {
 			log.Fatal(err)
 		}
 
+		// category list
 		var cl []insCat
 
 		doc.Find(".b-multi-menu > .b-multi-menu__item").Each(func(i int, m *goquery.Selection) {
@@ -188,6 +283,7 @@ func processStore(s insStoreType)  {
 
 				m.Find(".b-multi-menu__submenu .b-multi-menu__link").Each(func(j int, sub *goquery.Selection) {
 					var c insCat
+					c.StoreId = s.StoreId
 					if l, e := sub.Attr("href"); e {
 						c.Link = l
 					}
@@ -203,6 +299,8 @@ func processStore(s insStoreType)  {
 
 				var c insCat
 
+				c.StoreId = s.StoreId
+
 				if t, e := l.Html(); e == nil {
 					c.Title = t
 				}
@@ -217,22 +315,44 @@ func processStore(s insStoreType)  {
 
 		if len(cl) > 0 {
 			for _, v := range cl {
-				processShopCategory(v)
-				// temporary
-				//break
+
+				if v.Title != "Скидки" && v.Title != "" && v.Link != "" {
+					processShopCategory(v)
+				}
 			}
 		}
 	}
 }
 
+func insInitDB() {
+
+	// := "watchbot_pg:watchbot_pg@127.0.0.1:5432/watchbot_pg"
+
+	var pgSqlConnectionString string
+
+	if val, exists := os.LookupEnv("PGSQLCONNECTIONSTRING"); exists {
+		pgSqlConnectionString = val
+	} else if err := godotenv.Load(".env"); err == nil {
+		pgSqlConnectionString = os.Getenv("PGSQLCONNECTIONSTRING")
+	}
+
+	db, err := sqlx.Connect("pgx", "postgres://" + pgSqlConnectionString)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	DB = db
+}
+
 func main()  {
+
+	insInitDB()
+
 	stores := getStores()
 
 	if len(stores) > 0 {
 		for _, store := range stores {
 			processStore(store)
-			// temporary
-			break
 		}
 	}
 }
