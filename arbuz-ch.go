@@ -1,11 +1,9 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"github.com/PuerkitoBio/goquery"
-	_ "github.com/jackc/pgx/stdlib"
 	"github.com/jmoiron/sqlx"
 	"github.com/joho/godotenv"
 	"io/ioutil"
@@ -14,7 +12,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+	_ "github.com/jackc/pgx/stdlib"
 )
 
 var DB *sqlx.DB
@@ -92,6 +92,25 @@ type apiResponseType struct {
 			Count int `json:"count"`
 		} `json:"products"`
 	} `json:"data"`
+}
+
+func initDB() {
+
+	// := "watchbot_pg:watchbot_pg@127.0.0.1:5432/watchbot_pg"
+	var pgSqlConnectionString string
+
+	if val, exists := os.LookupEnv("PGSQLCONNECTIONSTRING"); exists {
+		pgSqlConnectionString = val
+	} else if err := godotenv.Load(".env"); err == nil {
+		pgSqlConnectionString = os.Getenv("PGSQLCONNECTIONSTRING")
+	}
+
+	db, err := sqlx.Connect("pgx", "postgres://" + pgSqlConnectionString)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	DB = db
 }
 
 func initScrap () (jwtToken string, phpSessId string, catalogString string) {
@@ -175,157 +194,151 @@ func initScrap () (jwtToken string, phpSessId string, catalogString string) {
 	return
 }
 
-func processCategory(jwtToken string, phpSessId string, categoryId int)  {
+func main()  {
 
-	currPage := 1
-	maxPage := 1
-
-	for {
-
-		url := "https://arbuz.kz/api/v1/shop/catalog/" + strconv.Itoa(categoryId) +
-			"&page=" + strconv.Itoa(currPage) +
-			"&limit=100"
-
-		//fmt.Println(url)
-
-		method := "GET"
-
-		client := &http.Client {}
-
-		req, err := http.NewRequest(method, url, nil)
-
-		req.Header.Add("Cookie", "PHPSESSID=" + phpSessId + "; arbuz-kz_jwt_v3=" + jwtToken)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-
-		res, err := client.Do(req)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-
-		defer res.Body.Close()
-
-		body, err := ioutil.ReadAll(res.Body)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-
-		var r apiResponseType
-
-		if err := json.Unmarshal([]byte(string(body)), &r); err == nil {
-
-			if len(r.Data.Products.Data) > 0 {
-				for _, p := range r.Data.Products.Data {
-					processProduct(p)
-					//break
-				}
-			}
-
-			maxPage = r.Data.Products.Page.Last
-
-		} else {
-			fmt.Println(err)
-		}
-
-		if currPage == maxPage {
-			break
-		} else {
-			currPage++
-		}
-	}
-}
-
-func processProduct(p productType) {
-
-	// products table
-	storedProduct := new(productType)
-
-	dbErr := DB.QueryRow("SELECT * FROM arbuz_products WHERE id = $1", p.ID).Scan(&storedProduct)
-
-	if dbErr != nil && dbErr == sql.ErrNoRows {
-
-		// insert product data
-		//fmt.Printf("%v \n", p)
-
-		_, err := DB.Exec("INSERT INTO arbuz_products (" +
-			"id,catalog_id,name,producer_country,brand_name,description,uri,image,measure,is_weighted,weight_avg," +
-			"weight_min,weight_max,piece_weight_max,quantity_min_step,barcode,is_available,is_local) " +
-			"VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)",
-			p.ID, p.CatalogID, p.Name, p.ProducerCountry, p.BrandName, p.Description,
-			p.URI, p.Image, p.Measure, p.IsWeighted, p.WeightAvg, p.WeightMin, p.WeightMax,
-			p.PieceWeightMax, p.QuantityMinStep, p.Barcode, p.IsAvailable, p.IsLocal)
-		if err != nil {
-			fmt.Println(err)
-		}
-	} else {
-		// update product data
-	}
-
-	// products_prices table
-	// get last price for this product, if previous price differs from current then insert new one
-	lastPrice := 0
-	currPrice := int(p.PriceActual)
-
-	pErr := DB.QueryRow("SELECT product_price FROM arbuz_prices WHERE product_id = $1 AND is_last=true", p.ID).Scan(&lastPrice)
-
-	if pErr != nil && pErr == sql.ErrNoRows {
-		DB.Exec("INSERT INTO arbuz_prices (product_id, product_price, is_last) VALUES ($1, $2, true)",
-			p.ID, currPrice)
-	} else if lastPrice != currPrice {
-
-		//fmt.Printf("%d => %d\n", lastPrice, currPrice)
-
-		DB.Exec("UPDATE arbuz_prices SET is_last=false WHERE product_id=$1 AND is_last=true", p.ID)
-		DB.Exec("INSERT INTO arbuz_prices (product_id, product_price, is_last) VALUES ($1, $2, true)", p.ID, currPrice)
-	}
-}
-
-func initDB() {
-	
-	// := "watchbot_pg:watchbot_pg@127.0.0.1:5432/watchbot_pg"
-
-	var pgSqlConnectionString string
-
-	if val, exists := os.LookupEnv("PGSQLCONNECTIONSTRING"); exists {
-		pgSqlConnectionString = val
-	} else if err := godotenv.Load(".env"); err == nil {
-		pgSqlConnectionString = os.Getenv("PGSQLCONNECTIONSTRING")
-	}
-
-	db, err := sqlx.Connect("pgx", "postgres://" + pgSqlConnectionString)
-	if err != nil {
-		log.Fatalln(err)
-	}
-
-	DB = db
-}
-
-func main ()  {
 	start := time.Now()
 
-	// establishing database connection
 	initDB()
 
+	type lastPrice struct {
+		ProductId int `json:"productId" db:"product_id"`
+		ProductPrice int `json:"productId" db:"product_price"`
+	}
+
+	lastPrices := []lastPrice{}
+	var lastPriceMap = make(map[int]int)
+
+	if err := DB.Select(&lastPrices, "SELECT product_id, product_price FROM arbuz_prices WHERE is_last=true"); err == nil {
+		if len(lastPrices) > 0 {
+			for _, lp := range lastPrices {
+				lastPriceMap[lp.ProductId] = lp.ProductPrice
+			}
+		}
+	}
+	fmt.Println("last price map len: ", len(lastPriceMap))
+
+
 	// categories
-	c := make(map[int]categoryType)
+	categories := make(map[int]categoryType)
 
 	// getting jwt token for further api calls
 	jwtToken, phpSessId, catalogString := initScrap()
 
-	if err := json.Unmarshal([]byte(catalogString), &c); err != nil {
+	if err := json.Unmarshal([]byte(catalogString), &categories); err != nil {
 		// panic
 		fmt.Println(err)
 	}
 
-	for _, v := range c {
+	var wg sync.WaitGroup
 
-		processCategory(jwtToken, phpSessId, v.Id)
+	productsChannel := make(chan productType)
 
-		//break
+	fmt.Println("cat len: ", len(categories))
+	wg.Add(len(categories))
+
+	for _, c := range categories {
+
+		// processing category
+		go func(jwtToken string, phpSessId string, categoryId int) {
+			defer wg.Done()
+
+			currPage := 1
+			maxPage  := 1
+
+			for {
+
+				url := "https://arbuz.kz/api/v1/shop/catalog/" + strconv.Itoa(categoryId) +
+					"&page=" + strconv.Itoa(currPage) +
+					"&limit=100"
+
+				//fmt.Println(url)
+
+				method := "GET"
+
+				client := &http.Client {}
+
+				req, err := http.NewRequest(method, url, nil)
+
+				req.Header.Add("Cookie", "PHPSESSID=" + phpSessId + "; arbuz-kz_jwt_v3=" + jwtToken)
+				if err != nil {
+					fmt.Println(err)
+					return
+				}
+
+				res, err := client.Do(req)
+				if err != nil {
+					fmt.Println(err)
+					return
+				}
+
+				defer res.Body.Close()
+
+				body, err := ioutil.ReadAll(res.Body)
+				if err != nil {
+					fmt.Println(err)
+					return
+				}
+
+				var r apiResponseType
+
+				if err := json.Unmarshal([]byte(string(body)), &r); err == nil {
+
+					if len(r.Data.Products.Data) > 0 {
+						for _, p := range r.Data.Products.Data {
+							productsChannel <- p
+						}
+					}
+
+					maxPage = r.Data.Products.Page.Last
+
+				} else {
+					fmt.Println(err)
+				}
+
+				if currPage == maxPage {
+					break
+				} else {
+					currPage++
+				}
+			}
+
+		}(jwtToken, phpSessId, c.Id)
+	}
+
+	go func() {
+		wg.Wait()
+		close(productsChannel)
+	}()
+
+	for p := range productsChannel {
+
+
+		productId, _ := strconv.Atoi(p.ID)
+		currPrice := int(p.PriceActual)
+
+		if lastPriceVal, ok := lastPriceMap[productId]; ok {
+			if lastPriceVal != currPrice {
+
+				//fmt.Printf("%d => %d\n", lastPrice, currPrice)
+
+				DB.Exec("UPDATE arbuz_prices SET is_last=false WHERE product_id=$1 AND is_last=true", p.ID)
+				DB.Exec("INSERT INTO arbuz_prices (product_id, product_price, is_last) VALUES ($1, $2, true)", p.ID, currPrice)
+			}
+		} else {
+
+			_, err := DB.Exec("INSERT INTO arbuz_products (" +
+				"id,catalog_id,name,producer_country,brand_name,description,uri,image,measure,is_weighted,weight_avg," +
+				"weight_min,weight_max,piece_weight_max,quantity_min_step,barcode,is_available,is_local) " +
+				"VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)",
+				p.ID, p.CatalogID, p.Name, p.ProducerCountry, p.BrandName, p.Description,
+				p.URI, p.Image, p.Measure, p.IsWeighted, p.WeightAvg, p.WeightMin, p.WeightMax,
+				p.PieceWeightMax, p.QuantityMinStep, p.Barcode, p.IsAvailable, p.IsLocal)
+			if err != nil {
+				fmt.Println(err)
+			}
+
+			DB.Exec("INSERT INTO arbuz_prices (product_id, product_price, is_last) VALUES ($1, $2, true)",p.ID, currPrice)
+		}
 	}
 
 	elapsed := time.Since(start)
