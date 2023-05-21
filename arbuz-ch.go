@@ -215,8 +215,6 @@ func main()  {
 			}
 		}
 	}
-	fmt.Println("last price map len: ", len(lastPriceMap))
-
 
 	// categories
 	categories := make(map[int]categoryType)
@@ -233,7 +231,6 @@ func main()  {
 
 	productsChannel := make(chan productType)
 
-	fmt.Println("cat len: ", len(categories))
 	wg.Add(len(categories))
 
 	for _, c := range categories {
@@ -312,32 +309,46 @@ func main()  {
 
 	for p := range productsChannel {
 
-
 		productId, _ := strconv.Atoi(p.ID)
 		currPrice := int(p.PriceActual)
 
+		// if last price is found in hashmap
 		if lastPriceVal, ok := lastPriceMap[productId]; ok {
+			// and does not match with current price from api
 			if lastPriceVal != currPrice {
 
 				//fmt.Printf("%d => %d\n", lastPrice, currPrice)
 
-				DB.Exec("UPDATE arbuz_prices SET is_last=false WHERE product_id=$1 AND is_last=true", p.ID)
-				DB.Exec("INSERT INTO arbuz_prices (product_id, product_price, is_last) VALUES ($1, $2, true)", p.ID, currPrice)
+				// mark existing prices of this product as outdated
+				if _, err := DB.Exec("UPDATE arbuz_prices SET is_last=false WHERE product_id=$1 AND is_last=true",
+					productId); err != nil {
+					fmt.Println(err)
+				}
+
+				// insert new price as last one
+				if _, err := DB.Exec("INSERT INTO arbuz_prices (product_id, product_price, is_last) " +
+					"VALUES ($1, $2, true)", productId, currPrice); err != nil {
+					fmt.Println(err)
+				}
 			}
 		} else {
 
-			_, err := DB.Exec("INSERT INTO arbuz_products (" +
+			// seems to be this is a new product
+			if _, err := DB.Exec("INSERT INTO arbuz_products (" +
 				"id,catalog_id,name,producer_country,brand_name,description,uri,image,measure,is_weighted,weight_avg," +
 				"weight_min,weight_max,piece_weight_max,quantity_min_step,barcode,is_available,is_local) " +
 				"VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)",
 				p.ID, p.CatalogID, p.Name, p.ProducerCountry, p.BrandName, p.Description,
 				p.URI, p.Image, p.Measure, p.IsWeighted, p.WeightAvg, p.WeightMin, p.WeightMax,
-				p.PieceWeightMax, p.QuantityMinStep, p.Barcode, p.IsAvailable, p.IsLocal)
-			if err != nil {
+				p.PieceWeightMax, p.QuantityMinStep, p.Barcode, p.IsAvailable, p.IsLocal); err != nil {
 				fmt.Println(err)
 			}
 
-			DB.Exec("INSERT INTO arbuz_prices (product_id, product_price, is_last) VALUES ($1, $2, true)",p.ID, currPrice)
+			// insert price
+			if _, err := DB.Exec("INSERT INTO arbuz_prices (product_id, product_price, is_last) " +
+				"VALUES ($1, $2, true)", productId, currPrice); err != nil {
+				fmt.Println(err)
+			}
 		}
 	}
 
