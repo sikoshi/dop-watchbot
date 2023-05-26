@@ -9,6 +9,8 @@ require (
 	github.com/joho/godotenv v1.5.1
 )
 
+require github.com/gosimple/unidecode v1.0.1 // indirect
+
 require (
 	github.com/andybalholm/cascadia v1.3.1 // indirect
 	github.com/cockroachdb/apd v1.1.0 // indirect

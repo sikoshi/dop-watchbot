@@ -1,10 +1,5 @@
-todo:
-- env file
-- db migrations
-- possible error handling
-
-shops:
-- arbuz
+shops to be parsed:
 - magnum
-- small
-- instashop
+- small (no app, no website)
+
+- use proxy list

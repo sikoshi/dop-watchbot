@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"github.com/gosimple/slug"
+	"time"
 )
 
 var DB *sqlx.DB
@@ -346,6 +347,8 @@ func insInitDB() {
 
 func main()  {
 
+	start := time.Now()
+
 	insInitDB()
 
 	stores := getStores()
@@ -355,4 +358,7 @@ func main()  {
 			processStore(store)
 		}
 	}
+
+	elapsed := time.Since(start)
+	log.Printf("time: %s", elapsed)
 }
