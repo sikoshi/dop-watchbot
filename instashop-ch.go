@@ -47,6 +47,26 @@ type insProduct struct {
 	Link string
 }
 
+func insInitDB() {
+
+	// := "watchbot_pg:watchbot_pg@127.0.0.1:5432/watchbot_pg"
+
+	var pgSqlConnectionString string
+
+	if val, exists := os.LookupEnv("PGSQLCONNECTIONSTRING"); exists {
+		pgSqlConnectionString = val
+	} else if err := godotenv.Load(".env"); err == nil {
+		pgSqlConnectionString = os.Getenv("PGSQLCONNECTIONSTRING")
+	}
+
+	db, err := sqlx.Connect("pgx", "postgres://" + pgSqlConnectionString)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	DB = db
+}
+
 func getStores() []insStoreType {
 
 	var r []insStoreType
@@ -96,25 +116,8 @@ func getStores() []insStoreType {
 	return r
 }
 
-func insInitDB() {
 
-	// := "watchbot_pg:watchbot_pg@127.0.0.1:5432/watchbot_pg"
-
-	var pgSqlConnectionString string
-
-	if val, exists := os.LookupEnv("PGSQLCONNECTIONSTRING"); exists {
-		pgSqlConnectionString = val
-	} else if err := godotenv.Load(".env"); err == nil {
-		pgSqlConnectionString = os.Getenv("PGSQLCONNECTIONSTRING")
-	}
-
-	db, err := sqlx.Connect("pgx", "postgres://" + pgSqlConnectionString)
-	if err != nil {
-		log.Fatalln(err)
-	}
-
-	DB = db
-}
+// return products list
 func processCategory(c insCat) []insProduct {
 	c.CategoryId, _ = strconv.Atoi(path.Base(c.Link))
 
@@ -254,6 +257,7 @@ func main()  {
 		wg.Add(len(stores))
 
 		for _, s := range stores  {
+
 			go func(s insStoreType) {
 
 				// products table
@@ -366,19 +370,76 @@ func main()  {
 		close(productsCh)
 	}()
 
+	// products map
+	type rawProduct struct {
+		ProductId int `json:"productId" db:"product_id"`
+		StoreId int `json:"StoreId" db:"store_id"`
+		CategoryId int `json:"CategoryId" db:"category_id"`
+		Brand string `json:"Brand" db:"brand"`
+		Link string `json:"Link" db:"link"`
+		Title string `json:"Title" db:"title"`
+	}
+
+	var rawProducts []rawProduct
+
+	productsMap := make(map[int]map[int]rawProduct)
+
+	if err := DB.Select(&rawProducts,
+		"SELECT product_id, store_id, category_id, brand, title, link FROM instashop_products"); err == nil {
+		if len(rawProducts) > 0 {
+			for _, rp := range rawProducts {
+				if _, ok := productsMap[rp.StoreId]; !ok {
+					productsMap[rp.StoreId] = make(map[int]rawProduct)
+				}
+
+				productsMap[rp.StoreId][rp.ProductId] = rp
+			}
+		}
+	}
+
+	/*if len(productsMap) > 0 {
+		for storeId, pMap := range productsMap {
+			fmt.Printf("store %d, %d products\n", storeId, len(pMap))
+		}
+	}*/
+
+
+	// prices map
+	type rawPrice struct {
+		StoreId int `json:"StoreId" db:"store_id"`
+		ProductId int `json:"productId" db:"product_id"`
+		ProductPrice int `json:"productId" db:"product_price"`
+	}
+
+	var rawPrices []rawPrice
+	pricesMap := make(map[int]map[int]int)
+
+
+	if err := DB.Select(&rawPrices,
+		"SELECT store_id, product_id, product_price FROM instashop_prices WHERE is_last=true"); err == nil {
+
+		if len(rawPrices) > 0 {
+			for _, pp := range rawPrices {
+				if _, ok := pricesMap[pp.StoreId]; !ok {
+					pricesMap[pp.StoreId] = make(map[int]int)
+				}
+
+				pricesMap[pp.StoreId][pp.ProductId] = pp.ProductPrice
+			}
+		}
+	}
+
+	/*if len(pricesMap) > 0 {
+		for storeId, pMap := range pricesMap {
+			fmt.Printf("store %d, %d last prices\n", storeId, len(pMap))
+		}
+	}*/
+
 	i := 0
 
 	for p := range productsCh {
 
-		var storedProduct insProduct
-
-		dbErr := DB.QueryRow(
-			"SELECT product_id, store_id, category_id, brand, title, link " +
-				"FROM instashop_products WHERE store_id=$1 AND product_id = $2",
-			p.StoreId, p.ProductId).Scan(
-			&storedProduct.ProductId, &storedProduct.StoreId, &storedProduct.CategoryId,
-			&storedProduct.Brand, &storedProduct.Title, &storedProduct.Link)
-		if dbErr != nil && dbErr == sql.ErrNoRows {
+		if _, ok := productsMap[p.StoreId][p.ProductId]; !ok {
 
 			_, err := DB.Exec("" +
 				"INSERT INTO instashop_products (product_id, store_id, category_id, brand, title, link) " +
@@ -388,21 +449,18 @@ func main()  {
 				fmt.Println(err)
 			}
 		}
+
 		// setting price
 
-		lastPrice := 0
 		currPrice := int(p.Price)
 
-		pErr := DB.QueryRow("SELECT product_price FROM instashop_prices " +
-			"WHERE product_id = $1 AND store_id=$2 AND is_last=true", p.ProductId, p.StoreId).Scan(&lastPrice)
-
-		if pErr != nil && pErr == sql.ErrNoRows {
+		if lastPrice, ok := pricesMap[p.StoreId][p.ProductId]; !ok {
+			// insert
 			DB.Exec("INSERT INTO instashop_prices (product_id, store_id, product_price, is_last) VALUES ($1, $2,$3, true)",
 				p.ProductId, p.StoreId, currPrice)
 		} else if lastPrice != currPrice {
 
-			//fmt.Printf("%d => %d\n", lastPrice, currPrice)
-
+			// update
 			DB.Exec("UPDATE instashop_prices SET is_last=false WHERE product_id=$1 AND store_id=$2 AND is_last=true", p.ProductId, p.StoreId)
 			DB.Exec("INSERT INTO instashop_prices (product_id, store_id, product_price, is_last) VALUES ($1, $2, true)", p.ProductId, p.StoreId, currPrice)
 		}
