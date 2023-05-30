@@ -15,5 +15,6 @@ DROP INDEX IF EXISTS idx_instashop_products_category;
 
 -- prices
 DROP TABLE IF EXISTS instashop_prices;
+DROP INDEX IF EXISTS instashop_price_store;
 DROP INDEX IF EXISTS instashop_price_product;
 DROP INDEX IF EXISTS instashop_price_product_last;
