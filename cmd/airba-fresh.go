@@ -113,11 +113,6 @@ func main()  {
 
 	insInitDB()
 
-	cityId := "5f5f1e3b4c8a49e692fefd70" // this code of almaty in techodom's registry
-
-
-
-
 	// products map
 	type rawProduct struct {
 		Sku					string `db:"sku"`
@@ -163,15 +158,14 @@ func main()  {
 		}
 	}
 
-	fmt.Println("productsMap: ", len(productsMap))
-	fmt.Println("pricesMap: ", len(pricesMap))
-
-
 	page  := 1
 	limit := 5000
 	count := 0
 
 	breakPagingLoop := false
+
+
+	cityId := "5f5f1e3b4c8a49e692fefd70" // this code of Almaty in techodom's registry
 
 	for {
 
@@ -189,7 +183,6 @@ func main()  {
 
 		req.Header.Set("affiliation","web")
 
-		fmt.Println(targetUrl)
 		resp, respErr := client.Do(req)
 
 		if respErr != nil {
@@ -219,49 +212,49 @@ func main()  {
 			return
 		}
 
-		if len(r.Payload) > 0 {
+		if len(r.Payload) < 1 {
+			break
+		}
 
-			fmt.Println("count: ", count)
+		// products loop
+		for _, p := range r.Payload {
 
-			for _, p := range r.Payload {
+			currPrice, err := strconv.Atoi(p.Price)
 
-				currPrice, err := strconv.Atoi(p.Price)
+			if err != nil {
+				continue
+			}
 
+			// Insert product
+			if _, ok := productsMap[p.Sku]; !ok {
+
+				_, err := DB.Exec(
+					"INSERT INTO airba_fresh_products (sku,title,brand,uri,merchant_code,merchant_name,measurement_code,measurement_name,measurement_step) " +
+						"VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ",
+					p.Sku, p.Title, p.Brand, p.URI, p.Merchant.Code, p.Merchant.Name, p.UnitMeasurement.Name, p.UnitMeasurement.Name, p.UnitMeasurement.MinStep)
 				if err != nil {
-					continue
+					fmt.Println(err)
 				}
+			}
 
-				// insert product
-				if _, ok := productsMap[p.Sku]; !ok {
-
-					_, err := DB.Exec(
-						"INSERT INTO airba_fresh_products (sku,title,brand,uri,merchant_code,merchant_name,measurement_code,measurement_name,measurement_step) " +
-							"VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ",
-						p.Sku, p.Title, p.Brand, p.URI, p.Merchant.Code, p.Merchant.Name, p.UnitMeasurement.Name, p.UnitMeasurement.Name, p.UnitMeasurement.MinStep)
-					if err != nil {
-						fmt.Println(err)
-					}
+			// Update price
+			if lastPrice, ok := pricesMap[p.Sku]; !ok {
+				// insert
+				if _, err := DB.Exec("INSERT INTO airba_fresh_prices (product_sku, product_price, is_last)" +
+					" VALUES ($1, $2, true)", p.Sku, p.Price); err != nil {
+					fmt.Println(err)
 				}
+			} else if lastPrice != currPrice {
+				// update
+				DB.Exec("UPDATE airba_fresh_prices SET is_last=false WHERE product_sku=$1 AND is_last=true", p.Sku)
+				DB.Exec("INSERT INTO airba_fresh_prices (product_sku, product_price, is_last) " +
+					"VALUES ($1, $2, true)", p.Sku, currPrice)
+			}
 
-				// update price
-				if lastPrice, ok := pricesMap[p.Sku]; !ok {
-					// insert
-					if _, err := DB.Exec("INSERT INTO airba_fresh_prices (product_sku, product_price, is_last)" +
-						" VALUES ($1, $2, true)", p.Sku, p.Price); err != nil {
-						fmt.Println(err)
-					}
-				} else if lastPrice != currPrice {
-					// update
-					DB.Exec("UPDATE airba_fresh_prices SET is_last=false WHERE product_sku=$1 AND is_last=true", p.Sku)
-					DB.Exec("INSERT INTO airba_fresh_prices (product_sku, product_price, is_last) " +
-						"VALUES ($1, $2, true)", p.Sku, currPrice)
-				}
+			count++
 
-				count++
-
-				if count == r.Total {
-					breakPagingLoop = true
-				}
+			if count == r.Total {
+				breakPagingLoop = true
 			}
 		}
 
