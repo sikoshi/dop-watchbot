@@ -37,7 +37,7 @@ services:
     networks:
       - default
     volumes:
-      - ./migrations:/migrations
+      - ./db/migrations:/migrations
     command: [ "-path", "/migrations", "-database",  "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}?sslmode=disable", "up" ]
     links:
       - watchbot_pg

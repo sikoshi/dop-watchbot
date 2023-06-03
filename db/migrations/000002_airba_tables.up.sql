@@ -1,5 +1,5 @@
 -- products
-create table airba_fresh_products
+CREATE TABLE airba_fresh_products
 (
     sku                 varchar not null primary key,
     title               varchar not null,
@@ -13,7 +13,7 @@ create table airba_fresh_products
 );
 
 -- prices
-create table airba_fresh_prices
+CREATE TABLE airba_fresh_prices
 (
     product_sku     varchar not null,
     product_price   integer not null,

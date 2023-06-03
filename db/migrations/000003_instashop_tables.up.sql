@@ -35,7 +35,7 @@ CREATE INDEX idx_instashop_products_store ON instashop_products(store_id);
 CREATE INDEX idx_instashop_products_category ON instashop_products(category_id);
 
 -- prices
-create table instashop_prices
+CREATE TABLE instashop_prices
 (
     store_id        integer,
     product_id      integer not null,

@@ -1,5 +1,5 @@
--- auto-generated definition
-create table arbuz_products
+-- products
+CREATE TABLE arbuz_products
 (
     id  integer not null constraint arbuz_products_pkey primary key,
     catalog_id        integer,
@@ -21,3 +21,15 @@ create table arbuz_products
     is_local          boolean,
     created_at        timestamp with time zone default CURRENT_TIMESTAMP
 );
+
+-- prices
+CREATE TABLE arbuz_prices
+(
+    product_id    integer not null,
+    product_price integer not null,
+    is_last       boolean,
+    created_at    timestamp with time zone default CURRENT_TIMESTAMP
+);
+
+CREATE INDEX arbuz_price_product on arbuz_prices (product_id);
+CREATE INDEX arbuz_price_product_last on arbuz_prices (product_id, is_last);
